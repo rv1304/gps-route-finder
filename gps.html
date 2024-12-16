@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GPS Location and Route Finder</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <style>
+    /* Ensure the map takes full height of the viewport minus header */
+    #map {
+      height: 80vh;
+      width: 100%;
+    }
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    h1 {
+      margin-top: 20px;
+    }
+    label {
+      margin: 10px 0;
+    }
+    select, p {
+      margin: 10px;
+    }
+    #status {
+      font-weight: bold;
+      margin-top: 10px;
+    }
+
+    /* Media Queries for Responsiveness */
+    @media (max-width: 600px) {
+      #map {
+        height: 60vh;
+      }
+      body {
+        padding: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>Route Finder</h1>
+  <div id="map"></div>
+  <label for="stop">Choose Stop:</label>
+  <select id="stop"></select>
+  <button id="startJourneyBtn">Start Journey</button>
+  <p id="time"></p>
+  <p id="status"></p>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      const map = L.map('map').setView([0, 0], 13); // Default view
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+      // Define the new stops with updated coordinates
+      const stops = [
+        { name: "Stop A", lat: 30.748011, lon: 76.768646 },
+        { name: "Stop B", lat: 30.747476, lon: 76.768925 },
+        { name: "Stop C", lat: 30.748117, lon: 76.769981 }
+      ];
+
+      // Populate stop options in the dropdown
+      const stopSelect = document.getElementById('stop');
+      stops.forEach((stop, index) => {
+        const option = document.createElement('option');
+        option.value = index;
+        option.textContent = stop.name;
+        stopSelect.appendChild(option);
+      });
+
+      const apiKey = '1a73268b489f49cdbaebccc4903b81f8'; // Replace with your own API key
+      const walkingSpeed = 5; // in km/h
+
+      let userMarker;
+      let userCircle;
+      let journeyStarted = false; // To track whether the journey has started
+      let destinationMarker; // For displaying destination
+
+      // Function to calculate distance between two points (in km)
+      function calculateDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371; // Radius of the Earth in km
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                  Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c; // Distance in km
+      }
+
+      // Function to update time and route when user moves
+      async function updateRoute(latitude, longitude) {
+        const selectedStop = stops[stopSelect.value];
+        const { lat, lon } = selectedStop;
+
+        // Request route data from Geoapify API
+        const response = await axios.get('https://api.geoapify.com/v1/routing', {
+          params: {
+            apiKey,
+            waypoints: `${latitude},${longitude}|${lat},${lon}`,
+            mode: 'walk'
+          }
+        });
+
+        const route = response.data.features[0];
+        const distance = route.properties.distance / 1000; // in km
+        const time = (distance / walkingSpeed) * 60; // in minutes
+
+        // Remove previous route (if any)
+        map.eachLayer(function (layer) {
+          if (layer instanceof L.GeoJSON) {
+            map.removeLayer(layer);
+          }
+        });
+
+        // Display route on map
+        L.geoJSON(route.geometry).addTo(map);
+
+        // Display time to reach the stop
+        document.getElementById('time').textContent = 
+          `Time to reach: ${time.toFixed(1)} minutes`;
+
+        // Check if user has reached the stop
+        const distanceToStop = calculateDistance(latitude, longitude, lat, lon);
+        if (distanceToStop < 0.01) { // Less than 10 meters
+          alert("You have reached your destination!");
+          journeyStarted = false; // Stop the journey once reached
+          document.getElementById('status').textContent = "You have reached your destination.";
+        }
+      }
+
+      // Get the user's initial position and set up watchPosition for continuous updates
+      navigator.geolocation.watchPosition(
+        (position) => {
+          const { latitude, longitude, speed } = position.coords;
+
+          // Update marker on map and move it
+          if (userMarker) {
+            userMarker.setLatLng([latitude, longitude]);
+          } else {
+            userMarker = L.marker([latitude, longitude]).addTo(map);
+            map.setView([latitude, longitude], 15);
+            userMarker.bindPopup("Your Location").openPopup();
+          }
+
+          // Add a circle to represent current location
+          if (!userCircle) {
+            userCircle = L.circle([latitude, longitude], { radius: 50, color: 'blue' }).addTo(map);
+          } else {
+            userCircle.setLatLng([latitude, longitude]);
+          }
+
+          // Display the destination marker
+          if (destinationMarker) {
+            destinationMarker.setLatLng([stops[stopSelect.value].lat, stops[stopSelect.value].lon]);
+          } else {
+            destinationMarker = L.marker([stops[stopSelect.value].lat, stops[stopSelect.value].lon]).addTo(map);
+            destinationMarker.bindPopup(`Destination: ${stops[stopSelect.value].name}`).openPopup();
+          }
+
+          // If speed is 0 or too low, show 'Not Moving' message
+          if (speed <= 0.1) {
+            document.getElementById('status').textContent = "You are not moving.";
+          } else {
+            document.getElementById('status').textContent = "You are moving.";
+          }
+
+          // Only update the route and time if the journey has started
+          if (journeyStarted) {
+            updateRoute(latitude, longitude);
+          }
+        },
+        () => {
+          alert("Unable to access GPS location");
+        },
+        { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+      );
+
+      // Start Journey button click event
+      document.getElementById('startJourneyBtn').addEventListener('click', () => {
+        if (stopSelect.value === "") {
+          alert("Please select a stop first!");
+        } else {
+          journeyStarted = true; // Start the journey
+          document.getElementById('status').textContent = "Journey Started!";
+          alert("Journey Started! Tracking your route...");
+        }
+      });
+    });
+  </script>
+</body>
+</html>
